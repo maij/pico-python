@@ -56,10 +56,11 @@ import platform
 # float is always defined as 32 bits
 # double is defined as 64 bits
 from ctypes import byref, POINTER, create_string_buffer, c_float, \
-    c_int16, c_int32, c_uint32, c_void_p
+    c_int16, c_int32, c_int64, c_uint32, c_void_p
 from ctypes import c_int32 as c_enum
 
 from picoscope.picobase import _PicoscopeBase
+import numpy as np
 
 
 class PS5000a(_PicoscopeBase):
@@ -99,6 +100,7 @@ class PS5000a(_PicoscopeBase):
                             "GateHigh": 2, "GateLow": 3}
     SIGGEN_TRIGGER_SOURCES = {"None": 0, "ScopeTrig": 1, "AuxIn": 2,
                               "ExtIn": 3, "SoftTrig": 4, "TriggerRaw": 5}
+    TIME_UNITS = [1e-15,1e-12,1e-9,1e-6,1e-3,1,10]
 
     # This is actually different depending on the AB/CD models
     # I wonder how we could detect the difference between the oscilloscopes
@@ -383,3 +385,54 @@ class PS5000a(_PicoscopeBase):
             c_int16(self.handle),
             c_enum(resolution))
         self.checkResult(m)
+
+    
+    #Morgan's additions
+    def _lowLevelGetValuesBulk(self, numSamples, fromSegment, toSegment, downSampleRatio, downSampleMode, overflow):
+        """Copy data from several memory segments at once"""
+        m = self.lib.ps5000aGetValuesBulk(c_int16(self.handle),
+            byref(c_int32(numSamples)),
+            c_int32(fromSegment),
+            c_int32(toSegment),
+            c_int32(downSampleRatio),
+            c_enum(downSampleMode),
+            overflow.ctypes.data_as(POINTER(c_int16))
+            )
+        self.checkResult(m)
+
+    def _lowLevelSetNoOfCaptures(self, numCaptures):
+        m = self.lib.ps5000aSetNoOfCaptures(c_int16(self.handle),
+            c_uint32(numCaptures))
+        self.checkResult(m)
+
+    def _lowLevelMemorySegments(self, numSegments):
+        maxSamples = c_int32()
+        m = self.lib.ps5000aMemorySegments(c_int16(self.handle),
+            c_uint32(numSegments), byref(maxSamples))
+        self.checkResult(m)
+        return maxSamples.value
+
+    def _lowLevelGetValuesTriggerTimeOffsetBulk(self, fromSegment,toSegment):
+        """ Supposedly gets the trigger times for a bunch of segments acquired in block mode.
+        It doesn't seem to work for some reason
+        """
+        nSegments=toSegment-fromSegment+1
+        #time = c_int64()
+        times = np.ascontiguousarray(
+            np.zeros(nSegments, dtype=np.int64)
+            )
+        timeUnits = np.ascontiguousarray(
+            np.zeros(nSegments, dtype=np.int32)
+            )
+
+        m = self.lib.ps5000aGetValuesTriggerTimeOffsetBulk64(c_int16(self.handle),
+            times.ctypes.data_as(POINTER(c_int64)),
+            timeUnits.ctypes.data_as(POINTER(c_enum)),
+            c_uint32(fromSegment),
+            c_uint32(toSegment)
+            )
+        self.checkResult(m)
+        #timeUnits=np.array([self.TIME_UNITS[tu] for tu in timeUnits])
+        return times, timeUnits
+
+

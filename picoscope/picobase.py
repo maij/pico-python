@@ -495,10 +495,15 @@ class _PicoscopeBase(object):
         # set up each row in the data array as a buffer for one of
         # the memory segments in the scope
         for i, segment in enumerate(range(fromSegment, toSegment+1)):
-            self._lowLevelSetDataBufferBulk(channel,
+            self._lowLevelSetDataBuffer(channel,
                                             data[i],
                                             segment,
                                             downSampleMode)
+			#The above change is correct for my ps5000a: not sure about other scopes? Morgan.
+            #self._lowLevelSetDataBufferBulk(channel,
+            #                                data[i],
+            #                                segment,
+            #                                downSampleMode)
         overflow = np.ascontiguousarray(
             np.zeros(numSegmentsToCopy, dtype=np.int16)
             )
@@ -752,7 +757,7 @@ class _PicoscopeBase(object):
         self._lowLevelSetDeviceResolution(self.ADC_RESOLUTIONS[resolution])
 
     def enumerateUnits(self):
-        """ Enumerate connceted units. Return serial numbers as list of strings. """
+        """ Enumerate connected units. Return serial numbers as list of strings. """
         return self._lowLevelEnumerateUnits()
 
     def open(self, serialNumber=None):
@@ -800,6 +805,25 @@ class _PicoscopeBase(object):
             ecName = self.errorNumToName(ec)
             ecDesc = self.errorNumToDesc(ec)
             raise IOError('Error calling %s: %s (%s)' % (inspect.stack()[1][3], ecName, ecDesc))
+
+	def quickSetup(self, 
+			chanParams=dict(coupling="AC", VRange=10.0, VOffset=0),
+			resolution="15",
+			nCaps=1, nMemorySegments=-1, sampleRate=5e6, acqTime=1e-3,
+			triggerParams=dict(trigSrc="External", threshold_V=1.0, direction="Rising", delay=0, enabled=True, timeout_ms=100),
+			):
+		self.setChannel("A",  enabled=True, **chanParams);
+		self.setChannel("B", enabled=False);
+
+		self.setResolution(str(resolution));
+		self.setNoOfCaptures(nCaps)
+		self.memorySegments(nCaps if nMemorySegments==-1 else nMemorySegments)
+		if nMemorySegments !=-1 and nMemorySegments<nCaps:
+			raise ValueError("nMemorySegments needs to be equal to or greater than the number of captures")
+		actSampleRate, maxN=self.setSamplingFrequency(sampleRate, sampleRate*acqTime)
+		self.setSimpleTrigger(**triggerParams)
+		if maxN < sampleRate*acqTime:
+			raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps))
 
     def errorNumToName(self, num):
         """ Return the name of the error as a string. """
