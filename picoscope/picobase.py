@@ -381,7 +381,7 @@ class _PicoscopeBase(object):
             channel = self.CHANNELS[channel]
 
         if dataV is None:
-            dataV = np.empty(dataRaw.size)
+            dataV = np.empty(dataRaw.shape)
 
         a2v = self.CHRange[channel] / float(self.getMaxValue())
         np.multiply(dataRaw, a2v, dataV)
@@ -497,9 +497,9 @@ class _PicoscopeBase(object):
         for i, segment in enumerate(range(fromSegment, toSegment+1)):
             self._lowLevelSetDataBuffer(channel,
                                             data[i],
-                                            segment,
-                                            downSampleMode)
-			#The above change is correct for my ps5000a: not sure about other scopes? Morgan.
+                                            downSampleMode,
+                                            segment)
+            #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
             #self._lowLevelSetDataBufferBulk(channel,
             #                                data[i],
             #                                segment,
@@ -513,8 +513,16 @@ class _PicoscopeBase(object):
 
         return (data, numSamples, overflow)
 
+    def getDataVBulk(self, channel='A', numSamples=0, fromSegment=0, 
+        toSegment=None, downSampleRatio=1, downSampleMode=0, data=None):
+        '''
+        Get data recorded in block mode, and convert it to volts
+        '''
+        (data, numSamples, overflow) = self.getDataRawBulk(channel, numSamples, fromSegment, 
+        toSegment, downSampleRatio, downSampleMode, data)
+        dataV=self.rawToV(channel, data)
 
-
+        return (dataV, numSamples, overflow)
     def setSigGenBuiltInSimple(self, offsetVoltage=0, pkToPk=2, waveType="Sine", frequency=1E6,
                                shots=1, triggerType="Rising", triggerSource="None"):
         """
@@ -806,24 +814,38 @@ class _PicoscopeBase(object):
             ecDesc = self.errorNumToDesc(ec)
             raise IOError('Error calling %s: %s (%s)' % (inspect.stack()[1][3], ecName, ecDesc))
 
-	def quickSetup(self, 
-			chanParams=dict(coupling="AC", VRange=10.0, VOffset=0),
-			resolution="15",
-			nCaps=1, nMemorySegments=-1, sampleRate=5e6, acqTime=1e-3,
-			triggerParams=dict(trigSrc="External", threshold_V=1.0, direction="Rising", delay=0, enabled=True, timeout_ms=100),
-			):
-		self.setChannel("A",  enabled=True, **chanParams);
-		self.setChannel("B", enabled=False);
+    def quickSetup(self, 
+            chanAParams=dict(coupling="AC", VRange=10.0, VOffset=0, BWLimited=False, probeAttenuation=1.0),
+            chanBParams=None,
+            sampleRate=5e6, 
+            acqTime=1e-3,
+            triggerParams=dict(trigSrc="External", threshold_V=1.0, direction="Rising", delay=0, enabled=True, timeout_ms=100),
+            nCaps=1, nMemorySegments=-1, 
+            resolution=None,
+            ):
+        """Set most parameters in one function
+        @chanA(BCD)Params: dictionary of arguments to setChannel. Note that if the dictionary is None, the channel will be disabled. 
+        @sampleRate: the desired samples per second for the scope, in Hz
+        @acqTime: the length of time (in seconds) to record after each trigger.
+        @triggerParams: a dictionary of arguments to setSimpleTrigger
+        @nCaps: The number of traces to store in memory each time runBlock is called (and by default the number that will be retrieved by getDataRawBulk)
+        @nMermorySegments: the number of windows in which to divide the scope memory. If -1 (default), it will be set to @nCaps
+        @resolution: calls setResolution, only for 5000 series devices.
+        
+        """
+        self.setChannel("A",  enabled=True, **chanAParams) if chanAParams else self.setChannel("A", enabled=False)
+        self.setChannel("B",  enabled=True, **chanBParams) if chanBParams else self.setChannel("B", enabled=False)
 
-		self.setResolution(str(resolution));
-		self.setNoOfCaptures(nCaps)
-		self.memorySegments(nCaps if nMemorySegments==-1 else nMemorySegments)
-		if nMemorySegments !=-1 and nMemorySegments<nCaps:
-			raise ValueError("nMemorySegments needs to be equal to or greater than the number of captures")
-		actSampleRate, maxN=self.setSamplingFrequency(sampleRate, sampleRate*acqTime)
-		self.setSimpleTrigger(**triggerParams)
-		if maxN < sampleRate*acqTime:
-			raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps))
+        if resolution:
+            self.setResolution(str(resolution));
+        self.setNoOfCaptures(nCaps)
+        self.memorySegments(nCaps if nMemorySegments==-1 else nMemorySegments)
+        if nMemorySegments !=-1 and nMemorySegments<nCaps:
+            raise ValueError("nMemorySegments needs to be equal to or greater than the number of captures")
+        actSampleRate, maxN=self.setSamplingFrequency(sampleRate, sampleRate*acqTime)
+        self.setSimpleTrigger(**triggerParams)
+        if maxN < sampleRate*acqTime:
+            raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps))
 
     def errorNumToName(self, num):
         """ Return the name of the error as a string. """
