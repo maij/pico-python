@@ -131,7 +131,12 @@ class _PicoscopeBase(object):
         self.handle = None
 
         if connect is True:
-            self.open(serialNumber)
+            try:
+                self.open(serialNumber)
+            except OSError: # This covers the case of it not opening because a previous scope object hasn't been garbage collected yet.
+                import gc
+                gc.collect()
+                self.open(serialNumber)
 
     def getUnitInfo(self, info):
         """ Return: A string containing the requested information. """
@@ -550,7 +555,7 @@ class _PicoscopeBase(object):
 
     def setAWGSimple(self, waveform, duration, offsetVoltage=None,
                      pkToPk=None, indexMode="Single", shots=1, triggerType="Rising",
-                     triggerSource="ScopeTrig"):
+                     triggerSource="ScopeTrig",extTrigThreshold=0.5):
         """
         Set the AWG to output your desired wavefrom.
 
@@ -579,13 +584,13 @@ class _PicoscopeBase(object):
 
         actual_druation = self.setAWGSimpleDeltaPhase(waveform, deltaPhase, offsetVoltage,
                                                       pkToPk, indexMode, shots, triggerType,
-                                                      triggerSource)
+                                                      triggerSource, extTrigThreshold=extTrigThreshold)
 
         return (actual_druation, deltaPhase)
 
     def setAWGSimpleDeltaPhase(self, waveform, deltaPhase, offsetVoltage=None,
                                pkToPk=None, indexMode="Single", shots=1, triggerType="Rising",
-                               triggerSource="ScopeTrig"):
+                               triggerSource="ScopeTrig", extTrigThreshold=0.5):
         """
         Specify deltaPhase between each sample instead of the total waveform duration.
 
@@ -660,7 +665,6 @@ class _PicoscopeBase(object):
             triggerType = self.SIGGEN_TRIGGER_TYPES[triggerType]
         if not isinstance(triggerSource, int):
             triggerSource = self.SIGGEN_TRIGGER_SOURCES[triggerSource]
-
         if waveform.dtype == np.int16:
             if offsetVoltage is None:
                 offsetVoltage = 0.0
@@ -687,14 +691,15 @@ class _PicoscopeBase(object):
 
             # make a copy of the original data as to not clobber up the array
             waveform = waveform - offsetVoltage
+            wvfmPkToPk=np.max(np.absolute(waveform)) * 2
             if pkToPk is None:
-                pkToPk = np.max(np.absolute(waveform)) * 2
+                pkToPk = wvfmPkToPk
 
             # waveform should now be baised around 0
             # with
             #     max(waveform) = +pkToPk/2
             #     min(waveform) = -pkToPk/2
-            waveform /= pkToPk
+            waveform /= wvfmPkToPk
 
             # waveform should now be a number between -0.5 and +0.5
 
@@ -715,7 +720,7 @@ class _PicoscopeBase(object):
             waveform.clip(self.AWGMinVal, self.AWGMaxVal, out=waveform)
 
         self._lowLevelSetAWGSimpleDeltaPhase(waveform, deltaPhase, offsetVoltage, pkToPk,
-                                             indexMode, shots, triggerType, triggerSource)
+                                             indexMode, shots, triggerType, triggerSource, extTrigThresholdFrac=extTrigThreshold)
 
         timeIncrement = self.getAWGTimeIncrement(deltaPhase)
         waveform_duration = timeIncrement * len(waveform)
