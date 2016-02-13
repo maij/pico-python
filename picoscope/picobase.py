@@ -479,36 +479,47 @@ class _PicoscopeBase(object):
 
         return (data, numSamplesReturned, overflow)
 
-    def getDataRawBulk(self, channel='A', numSamples=0, fromSegment=0, 
+    def getDataRawBulk(self, channels='A', numSamples=0, fromSegment=0, 
         toSegment=None, downSampleRatio=1, downSampleMode=0, data=None):
         '''
         Get data recorded in block mode.
         '''
-        if not isinstance(channel, int):
-            channel = self.CHANNELS[channel]
-        if toSegment is None:
-            toSegment = self.noSegments - 1
-        if numSamples == 0:
-            numSamples = min(self.maxSamples, self.noSamples)
 
-        numSegmentsToCopy = toSegment - fromSegment + 1
+        # Process the channels parameter: could be int, string, or list of those
+
+        if isinstance(obj, Iterable) and not isinstance(channels, str): #If it's a list
+            channels=[channels]
+        channels=[chan if isinstance(chan, int) else self.CHANNELS[chan] 
+                                for chan in channels]
+
+        numChannels=len(channels)
+
         if data is None:
             data = np.ascontiguousarray(
-                np.zeros((numSegmentsToCopy, numSamples), dtype=np.int16)
+                np.zeros((numChannels, numSegmentsToCopy, numSamples), dtype=np.int16)
                 )
 
-        # set up each row in the data array as a buffer for one of
-        # the memory segments in the scope
-        for i, segment in enumerate(range(fromSegment, toSegment+1)):
-            self._lowLevelSetDataBuffer(channel,
-                                            data[i],
-                                            downSampleMode,
-                                            segment)
-            #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
-            #self._lowLevelSetDataBufferBulk(channel,
-            #                                data[i],
-            #                                segment,
-            #                                downSampleMode)
+        for n, chan in enumerate(channels): 
+            if toSegment is None:
+                toSegment = self.noSegments - 1
+            if numSamples == 0:
+                numSamples = min(self.maxSamples, self.noSamples)
+
+            numSegmentsToCopy = toSegment - fromSegment + 1
+
+            # set up each row in the data array as a buffer for one of
+            # the memory segments in the scope
+            for i, segment in enumerate(range(fromSegment, toSegment+1)):
+                self._lowLevelSetDataBuffer(chan,
+                                                data[n,i],
+                                                downSampleMode,
+                                                segment)
+                #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
+                #self._lowLevelSetDataBufferBulk(channel,
+                #                                data[i],
+                #                                segment,
+                #                                downSampleMode)
+
         overflow = np.ascontiguousarray(
             np.zeros(numSegmentsToCopy, dtype=np.int16)
             )
@@ -516,7 +527,7 @@ class _PicoscopeBase(object):
         self._lowLevelGetValuesBulk(numSamples, fromSegment, toSegment,
             downSampleRatio, downSampleMode, overflow)
 
-        return (data, numSamples, overflow)
+        return (np.squeeze(data), numSamples, overflow)
 
     def getDataVBulk(self, channel='A', numSamples=0, fromSegment=0, 
         toSegment=None, downSampleRatio=1, downSampleMode=0, data=None):
@@ -525,7 +536,12 @@ class _PicoscopeBase(object):
         '''
         (data, numSamples, overflow) = self.getDataRawBulk(channel, numSamples, fromSegment, 
         toSegment, downSampleRatio, downSampleMode, data)
-        dataV=self.rawToV(channel, data)
+        if data.ndim=3: #Looks like we've got a list of channels/data results
+            if data.shape[0]>4: 
+                raise ValueError("Somethings fishy here, seems like we've got more than 4 channels!")
+            dataV=np.array([self.rawToV(channel[n], data[n]) for n in data.shape[0]])
+        else:
+            dataV=self.rawToV(channel, data)
 
         return (dataV, numSamples, overflow)
     def setSigGenBuiltInSimple(self, offsetVoltage=0, pkToPk=2, waveType="Sine", frequency=1E6,

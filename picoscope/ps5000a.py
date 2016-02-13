@@ -441,3 +441,15 @@ class PS5000a(_PicoscopeBase):
 		return times, timeUnits
 
 
+    #Streaming
+    def _lowLevelRunStreaming(self, sampleInterval, sampleIntervalTimeUnits, maxPreTriggerSamples, maxPostTriggerSamples, autoStop, downSampleRatio, downSampleRatioMode, overviewBufferSize):
+
+		m = self.lib.ps5000aRunStreaming(c_int16(self.handle), c_uint32(sampleInterval), c_enum(sampleIntervalTimeUnits), c_uint32(maxPreTriggerSamples), c_uint32(maxPostTriggerSamples), c_int16(autoStop), c_uint32(downSampleRatio), c_enum(downSampleRatioMode), c_uint32(overviewBufferSize))
+		self.checkResult(m)
+        return
+    def _lowLevelGetStreamingLatestValues(self, lpPs5000aReady, pParameter):
+
+from ctypes import CFUNCTYPE
+callbackFuncType=CFUNCTYPE(c_int16, c_int32, c_uint32, 
+                c_int16, c_uint32, c_int16, c_int16, c_void_p)
+def streamingReadyCallback(handle, noOfSamples, startIndex, overflow, triggerAt, triggered, autoStop, parameter):
