@@ -48,6 +48,8 @@ import time
 #import warnings
 
 import numpy as np
+from collections import Iterable
+import pdb
 
 
 class _PicoscopeBase(object):
@@ -297,6 +299,7 @@ class _PicoscopeBase(object):
 
     def setNoOfCaptures(self, noCaptures):
         self._lowLevelSetNoOfCaptures(noCaptures)
+        self.noCaptures=noCaptures
 
     def memorySegments(self, noSegments):
         maxSamples = self._lowLevelMemorySegments(noSegments)
@@ -487,25 +490,27 @@ class _PicoscopeBase(object):
 
         # Process the channels parameter: could be int, string, or list of those
 
-        if isinstance(obj, Iterable) and not isinstance(channels, str): #If it's a list
+        if not isinstance(channels, Iterable) or isinstance(channels, str): #If it's a list
             channels=[channels]
         channels=[chan if isinstance(chan, int) else self.CHANNELS[chan] 
                                 for chan in channels]
 
         numChannels=len(channels)
 
+        #pdb.set_trace()
+        if toSegment is None:
+            toSegment = self.noSegments - 1
+        numSegmentsToCopy = toSegment - fromSegment + 1
+
+        if numSamples == 0:
+            numSamples = min(self.maxSamples, self.noSamples)
         if data is None:
             data = np.ascontiguousarray(
                 np.zeros((numChannels, numSegmentsToCopy, numSamples), dtype=np.int16)
                 )
 
         for n, chan in enumerate(channels): 
-            if toSegment is None:
-                toSegment = self.noSegments - 1
-            if numSamples == 0:
-                numSamples = min(self.maxSamples, self.noSamples)
 
-            numSegmentsToCopy = toSegment - fromSegment + 1
 
             # set up each row in the data array as a buffer for one of
             # the memory segments in the scope
@@ -521,8 +526,9 @@ class _PicoscopeBase(object):
                 #                                downSampleMode)
 
         overflow = np.ascontiguousarray(
-            np.zeros(numSegmentsToCopy, dtype=np.int16)
+            np.zeros(numSegmentsToCopy*2, dtype=np.int16)
             )
+        #print("overflow: {}".format(overflow)) 
 
         self._lowLevelGetValuesBulk(numSamples, fromSegment, toSegment,
             downSampleRatio, downSampleMode, overflow)
@@ -536,10 +542,10 @@ class _PicoscopeBase(object):
         '''
         (data, numSamples, overflow) = self.getDataRawBulk(channel, numSamples, fromSegment, 
         toSegment, downSampleRatio, downSampleMode, data)
-        if data.ndim=3: #Looks like we've got a list of channels/data results
+        if data.ndim==3: #Looks like we've got a list of channels/data results
             if data.shape[0]>4: 
                 raise ValueError("Somethings fishy here, seems like we've got more than 4 channels!")
-            dataV=np.array([self.rawToV(channel[n], data[n]) for n in data.shape[0]])
+            dataV=np.array([self.rawToV(channel[n], data[n]) for n in range(data.shape[0])])
         else:
             dataV=self.rawToV(channel, data)
 
@@ -866,7 +872,7 @@ class _PicoscopeBase(object):
         actSampleRate, maxN=self.setSamplingFrequency(sampleRate, sampleRate*acqTime)
         self.setSimpleTrigger(**triggerParams)
         if maxN < sampleRate*acqTime:
-            raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps))
+            raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps, maxN/sampleRate))
 
     def errorNumToName(self, num):
         """ Return the name of the error as a string. """
