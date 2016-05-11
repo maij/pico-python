@@ -62,6 +62,14 @@ from ctypes import c_int32 as c_enum
 from picoscope.picobase import _PicoscopeBase
 import numpy as np
 
+from ctypes import CFUNCTYPE
+callbackFuncType=CFUNCTYPE(None, c_int16, c_int32, c_uint32, 
+                c_int16, c_uint32, c_int16, c_int16, c_void_p )
+
+
+GLB_done=False
+
+
 
 class PS5000a(_PicoscopeBase):
     """The following are low-level functions for the PS5000"""
@@ -146,7 +154,6 @@ class PS5000a(_PicoscopeBase):
             self.lib = windll.LoadLibrary(self.LIBNAME + ".dll")
 
         self.resolution = self.ADC_RESOLUTIONS["8"]
-
         super(PS5000a, self).__init__(serialNumber, connect)
 
     def _lowLevelOpenUnit(self, sn):
@@ -444,13 +451,41 @@ class PS5000a(_PicoscopeBase):
 
     #Streaming
     def _lowLevelRunStreaming(self, sampleInterval, sampleIntervalTimeUnits, maxPreTriggerSamples, maxPostTriggerSamples, autoStop, downSampleRatio, downSampleRatioMode, overviewBufferSize):
-        m = self.lib.ps5000aRunStreaming(c_int16(self.handle), c_uint32(sampleInterval), c_enum(sampleIntervalTimeUnits), c_uint32(maxPreTriggerSamples), c_uint32(maxPostTriggerSamples), c_int16(autoStop), c_uint32(downSampleRatio), c_enum(downSampleRatioMode), c_uint32(overviewBufferSize))
+        sampleInterval_c=c_uint32(sampleInterval)
+        m = self.lib.ps5000aRunStreaming(c_int16(self.handle), byref(sampleInterval_c), c_enum(sampleIntervalTimeUnits), c_uint32(maxPreTriggerSamples), c_uint32(maxPostTriggerSamples), c_int16(autoStop), c_uint32(downSampleRatio), c_enum(downSampleRatioMode), c_uint32(overviewBufferSize))
+        self.streamReady=False
+        self.checkResult(m)
+        print(sampleInterval_c)
+        return
+
+    def _lowLevelGetStreamingLatestValues(self, pyFuncReady=None, pParameter=None):
+        if pyFuncReady is None:
+            pyFuncReady=self._getSimpleCallback()
+
+        m=self.lib.ps5000aGetStreamingLatestValues(
+                    c_int16(self.handle),
+                    callbackFuncType(pyFuncReady),
+                    c_void_p(),
+                )
         self.checkResult(m)
         return
-    #def _lowLevelGetStreamingLatestValues(self, lpPs5000aReady, pParameter):
 
-from ctypes import CFUNCTYPE
-callbackFuncType=CFUNCTYPE(c_int16, c_int32, c_uint32, 
-                c_int16, c_uint32, c_int16, c_int16, c_void_p)
-def streamingReadyCallback(handle, noOfSamples, startIndex, overflow, triggerAt, triggered, autoStop, parameter):
-    pass
+
+    def _getSimpleCallback(self):
+        """simple example callback function for streaming"""
+        def streamingReadySimpleCallback(handle, noOfSamples, startIndex, overflow, triggerAt, triggered, autoStop, parameter):
+            self.streamReady=True
+            print("noOfSamples %i"%noOfSamples);
+            print("startIndex %i"%startIndex);
+            res=self.streamCallBackRes
+            res.noOfSamples=noOfSamples
+            res.startIndex=startIndex
+            res.overflow=overflow
+            res.triggerAt=triggerAt
+            res.triggered=triggered
+            res.autoStop=autoStop
+            res.parameter=parameter
+
+        return streamingReadySimpleCallback
+
+

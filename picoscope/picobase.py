@@ -487,46 +487,18 @@ class _PicoscopeBase(object):
         '''
         Get data recorded in block mode.
         '''
+        data=self.allocateDataBuffers(channels=channels, numSamples=numSamples, fromSegment=fromSegment, 
+        toSegment=toSegment,  downSampleMode=downSampleMode, data=data)#                                downSampleMode)
 
-        # Process the channels parameter: could be int, string, or list of those
-
-        if not isinstance(channels, Iterable) or isinstance(channels, str): #If it's a list
-            channels=[channels]
-        channels=[chan if isinstance(chan, int) else self.CHANNELS[chan] 
-                                for chan in channels]
-
-        numChannels=len(channels)
-
-        #pdb.set_trace()
-        if toSegment is None:
-            toSegment = self.noSegments - 1
-        numSegmentsToCopy = toSegment - fromSegment + 1
-
-        if numSamples == 0:
-            numSamples = min(self.maxSamples, self.noSamples)
-        if data is None:
-            data = np.ascontiguousarray(
-                np.zeros((numChannels, numSegmentsToCopy, numSamples), dtype=np.int16)
-                )
-
-        for n, chan in enumerate(channels): 
-
-
-            # set up each row in the data array as a buffer for one of
-            # the memory segments in the scope
-            for i, segment in enumerate(range(fromSegment, toSegment+1)):
-                self._lowLevelSetDataBuffer(chan,
-                                                data[n,i],
-                                                downSampleMode,
-                                                segment)
-                #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
-                #self._lowLevelSetDataBufferBulk(channel,
-                #                                data[i],
-                #                                segment,
-                #                                downSampleMode)
-
+        numSegmentsToCopy,numSamples=data.shape[-2:]
+        toSegment=fromSegment+numSegmentsToCopy -1
+        if data.ndim>1:
+            numChans=data.shape[0]
+        else:
+            numChans=1
+        #numSegmentsToCopy = toSegment - fromSegment + 1
         overflow = np.ascontiguousarray(
-            np.zeros(numSegmentsToCopy*2, dtype=np.int16)
+            np.zeros(numSegmentsToCopy*2, dtype=np.int16) #probably don't need the x2 here
             )
         #print("overflow: {}".format(overflow)) 
 
@@ -756,6 +728,66 @@ class _PicoscopeBase(object):
             waveform_duration *= 4
 
         return waveform_duration
+
+
+    def allocateDataBuffers(self, channels='A', numSamples=0, fromSegment=0, 
+        toSegment=None, downSampleMode=0, data=None):
+        """Allocate memory for the driver and application buffers, and return it, or connect the given pre-allocated buffer to the driver.
+        """
+        if not isinstance(channels, Iterable) or isinstance(channels, str): #If it's a list
+            channels=[channels]
+        channels=[chan if isinstance(chan, int) else self.CHANNELS[chan] 
+                                for chan in channels]
+
+        numChannels=len(channels)
+
+        if toSegment is None:
+            toSegment = self.noSegments - 1
+        numSegmentsToCopy = toSegment - fromSegment + 1
+
+        if numSamples == 0:
+            numSamples = min(self.maxSamples, self.noSamples)
+        if data is None:
+            data = np.ascontiguousarray(
+                np.zeros((numChannels, numSegmentsToCopy, numSamples), dtype=np.int16)
+                )
+
+        for n, chan in enumerate(channels): 
+            # set up each row in the data array as a buffer for one of
+            # the memory segments in the scope
+            for i, segment in enumerate(range(fromSegment, toSegment+1)):
+                self._lowLevelSetDataBuffer(chan,
+                                                data[n,i],
+                                                downSampleMode,
+                                                segment)
+                #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
+                #self._lowLevelSetDataBufferBulk(channel,
+                #                                data[i],
+                #                                segment,
+                #                                downSampleMode)
+        self.data=data
+        return data
+
+    def setupStreaming(self, channels='A', numSamples=0, fromSegment=0, 
+        toSegment=None, downSampleRatio=1, downSampleMode=0, data=None):
+        # Process the channels parameter: could be int, string, or list of those
+        overflow = np.ascontiguousarray()
+
+    def runStreaming(self, preTrig=0.0,  downSampleRatio=1,downSampleMode=0, bAutoStop=False):
+
+        sampleInterval=self.getTimestepFromTimebase(self.timebase)
+        TIME_UNITS=2 #ns
+        nSampleInterval=int(sampleInterval/1e-9)
+        Npts= min(self.noSamples, self.maxSamples)
+        print("Npts: {}".format(Npts))
+        print("nSampleInterval: {}".format(nSampleInterval))
+        self._lowLevelRunStreaming(nSampleInterval, TIME_UNITS, int(Npts * preTrig), int(Npts * (1 - preTrig)), bAutoStop, downSampleRatio, downSampleMode, self.data.shape[-1])
+
+        #self._lowLevelRunBlock(int(nSamples * pretrig), int(nSamples * (1 - pretrig)),
+                               #self.timebase, self.oversample, segmentIndex)
+
+    def getStreamingLatestValues(self,callback=None):
+        self._lowLevelGetStreamingLatestValues(callback)
 
     def getAWGDeltaPhase(self, timeIncrement):
         """
