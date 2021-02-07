@@ -470,3 +470,123 @@ class PS3000a(_PicoscopeBase):
             c_int16(self.handle),
             c_enum(triggerType))
         self.checkResult(m)
+
+    def _lowLevelSetDeviceResolution(self, resolution):
+        self.resolution = resolution
+        m = self.lib.ps3000aSetDeviceResolution(
+            c_int16(self.handle),
+            c_enum(resolution))
+        self.checkResult(m)
+
+    def _lowLevelChangePowerSource(self, powerstate):
+        m = self.lib.ps3000aChangePowerSource(
+            c_int16(self.handle),
+            c_enum(powerstate))
+        self.checkResult(m)
+
+    # Morgan's additions
+    def _lowLevelGetValuesBulk(self, numSamples, fromSegment, toSegment,
+                               downSampleRatio, downSampleMode, overflow):
+        """Copy data from several memory segments at once."""
+        overflowPoint = overflow.ctypes.data_as(POINTER(c_int16))
+        m = self.lib.ps3000aGetValuesBulk(
+            c_int16(self.handle),
+            byref(c_int32(numSamples)),
+            c_int32(fromSegment),
+            c_int32(toSegment),
+            c_int32(downSampleRatio),
+            c_enum(downSampleMode),
+            overflowPoint
+            )
+        self.checkResult(m)
+
+    def _lowLevelSetNoOfCaptures(self, numCaptures):
+        m = self.lib.ps3000aSetNoOfCaptures(
+            c_int16(self.handle),
+            c_uint32(numCaptures))
+        self.checkResult(m)
+
+    def _lowLevelMemorySegments(self, numSegments):
+        maxSamples = c_int32()
+        m = self.lib.ps3000aMemorySegments(
+            c_int16(self.handle), c_uint32(numSegments), byref(maxSamples))
+        self.checkResult(m)
+        return maxSamples.value
+
+    def _lowLevelGetValuesTriggerTimeOffsetBulk(self, fromSegment, toSegment):
+        """Supposedly gets the trigger times for a bunch of segments at once.
+
+        For block mode.
+        Can't get it to work yet, however.
+        """
+        import numpy as np
+
+        nSegments = toSegment - fromSegment + 1
+        # time = c_int64()
+        times = np.ascontiguousarray(
+            np.zeros(nSegments, dtype=np.int64)
+            )
+        timeUnits = np.ascontiguousarray(
+            np.zeros(nSegments, dtype=np.int32)
+            )
+
+        m = self.lib.ps3000aGetValuesTriggerTimeOffsetBulk64(
+            c_int16(self.handle),
+            times.ctypes.data_as(POINTER(c_int64)),
+            timeUnits.ctypes.data_as(POINTER(c_enum)),
+            c_uint32(fromSegment),
+            c_uint32(toSegment)
+            )
+        self.checkResult(m)
+        # timeUnits=np.array([self.TIME_UNITS[tu] for tu in timeUnits])
+        return times, timeUnits
+
+    # Streaming
+    def _lowLevelRunStreaming(self, sampleInterval, sampleIntervalTimeUnits,
+                              maxPreTriggerSamples, maxPostTriggerSamples, autoStop,
+                              downSampleRatio, downSampleRatioMode,
+                              overviewBufferSize):
+        sampleInterval_c = c_uint32(sampleInterval)
+        m = self.lib.ps3000aRunStreaming(c_int16(self.handle),
+                                         byref(sampleInterval_c),
+                                         c_enum(sampleIntervalTimeUnits),
+                                         c_uint32(maxPreTriggerSamples),
+                                         c_uint32(maxPostTriggerSamples),
+                                         c_int16(autoStop), c_uint32(downSampleRatio),
+                                         c_enum(downSampleRatioMode),
+                                         c_uint32(overviewBufferSize))
+        self.streamReady = False
+        self.checkResult(m)
+        print(sampleInterval_c)
+
+        return
+
+    def _lowLevelGetStreamingLatestValues(self, pyFuncReady=None, pParameter=None):
+        if pyFuncReady is None:
+            pyFuncReady = self._getSimpleCallback()
+        m = self.lib.ps3000aGetStreamingLatestValues(
+            callbackFuncType(pyFuncReady),
+            c_int16(self.handle),
+            c_void_p(),
+            self.checkResult(m)
+        )
+        return
+
+        """simple example callback function for streaming"""
+
+    def _getSimpleCallback(self):
+        def streamingReadySimpleCallback(handle, noOfSamples, startIndex, overflow,
+                                         triggerAt, triggered, autoStop, parameter):
+            self.streamReady = True
+            print("noOfSamples %i" % noOfSamples);
+            print("startIndex %i" % startIndex);
+            res = self.streamCallBackRes
+            res.noOfSamples = noOfSamples
+            res.startIndex = startIndex
+            res.overflow = overflow
+            res.triggerAt = triggerAt
+            res.autoStop = autoStop
+            res.triggered = triggered
+            res.parameter = parameter
+
+        return streamingReadySimpleCallback
