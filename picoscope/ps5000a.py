@@ -60,6 +60,15 @@ from ctypes import byref, POINTER, create_string_buffer, c_float, \
 from ctypes import c_int32 as c_enum
 
 from picoscope.picobase import _PicoscopeBase
+import numpy as np
+
+from ctypes import CFUNCTYPE
+callbackFuncType=CFUNCTYPE(None, c_int16, c_int32, c_uint32, 
+                c_int16, c_uint32, c_int16, c_int16, c_void_p )
+
+
+GLB_done=False
+
 
 
 class PS5000a(_PicoscopeBase):
@@ -101,6 +110,7 @@ class PS5000a(_PicoscopeBase):
                             "GateHigh": 2, "GateLow": 3}
     SIGGEN_TRIGGER_SOURCES = {"None": 0, "ScopeTrig": 1, "AuxIn": 2,
                               "ExtIn": 3, "SoftTrig": 4, "TriggerRaw": 5}
+    TIME_UNITS = [1e-15,1e-12,1e-9,1e-6,1e-3,1,10]
 
     # This is actually different depending on the AB/CD models
     # I wonder how we could detect the difference between the oscilloscopes
@@ -111,9 +121,21 @@ class PS5000a(_PicoscopeBase):
     # VARIANT_INFO and others show up as PS6403X where X = A,C or D
 
     AWGPhaseAccumulatorSize = 32
+    #AWGBufferAddressWidth   = 14
+    AWGBufferAddressWidth   = 14
+    AWGMaxSamples           = 2 ** AWGBufferAddressWidth
 
     AWGDACInterval = 5E-9  # in seconds
     AWGDACFrequency = 1 / AWGDACInterval
+
+    # Note this is NOT what is written in the Programming guide as of version
+    # 10_5_0_28
+    # This issue was acknowledged in this thread
+    # http://www.picotech.com/support/topic13217.html
+    AWGMaxVal               = 0x0FFF
+    AWGMinVal               = 0x0000
+    AWGMaxVal               = 32767
+    AWGMinVal               = -32768
 
     AWG_INDEX_MODES = {"Single": 0, "Dual": 1, "Quad": 2}
 
@@ -140,7 +162,6 @@ class PS5000a(_PicoscopeBase):
             )
 
         self.resolution = self.ADC_RESOLUTIONS["8"]
-
         super(PS5000a, self).__init__(serialNumber, connect)
 
     def _lowLevelOpenUnit(self, sn):
@@ -379,7 +400,9 @@ class PS5000a(_PicoscopeBase):
                                         shots, triggerType, triggerSource):
         """Waveform should be an array of shorts."""
         waveformPtr = waveform.ctypes.data_as(POINTER(c_int16))
-
+        assert( abs(extTrigThresholdFrac)<=1 )
+        extTrigThreshold_I16=c_int16( int((2**15-1)*extTrigThresholdFrac) )
+        print(extTrigThreshold_I16)
         m = self.lib.ps5000aSetSigGenArbitrary(
             c_int16(self.handle),
             c_uint32(int(offsetVoltage * 1E6)),  # offset voltage in microvolts
@@ -397,7 +420,7 @@ class PS5000a(_PicoscopeBase):
             c_uint32(0),                         # sweeps
             c_uint32(triggerType),
             c_uint32(triggerSource),
-            c_int16(0))                          # extInThreshold
+            extTrigThreshold_I16)                          # extInThreshold
         self.checkResult(m)
 
     def _lowLevelSetDataBuffer(self, channel, data, downSampleMode,
@@ -542,3 +565,42 @@ class PS5000a(_PicoscopeBase):
         self.checkResult(m)
         # timeUnits=np.array([self.TIME_UNITS[tu] for tu in timeUnits])
         return times, timeUnits
+
+    #Streaming
+    def _lowLevelRunStreaming(self, sampleInterval, sampleIntervalTimeUnits, maxPreTriggerSamples, maxPostTriggerSamples, autoStop, downSampleRatio, downSampleRatioMode, overviewBufferSize):
+        sampleInterval_c=c_uint32(sampleInterval)
+        m = self.lib.ps5000aRunStreaming(c_int16(self.handle), byref(sampleInterval_c), c_enum(sampleIntervalTimeUnits), c_uint32(maxPreTriggerSamples), c_uint32(maxPostTriggerSamples), c_int16(autoStop), c_uint32(downSampleRatio), c_enum(downSampleRatioMode), c_uint32(overviewBufferSize))
+        self.streamReady=False
+        self.checkResult(m)
+        print(sampleInterval_c)
+
+        return
+    def _lowLevelGetStreamingLatestValues(self, pyFuncReady=None, pParameter=None):
+        if pyFuncReady is None:
+
+            pyFuncReady=self._getSimpleCallback()
+        m=self.lib.ps5000aGetStreamingLatestValues(
+                    callbackFuncType(pyFuncReady),
+                    c_int16(self.handle),
+                    c_void_p(),
+        self.checkResult(m)
+                )
+        return
+
+
+        """simple example callback function for streaming"""
+    def _getSimpleCallback(self):
+        def streamingReadySimpleCallback(handle, noOfSamples, startIndex, overflow, triggerAt, triggered, autoStop, parameter):
+            self.streamReady=True
+            print("noOfSamples %i"%noOfSamples);
+            print("startIndex %i"%startIndex);
+            res=self.streamCallBackRes
+            res.noOfSamples=noOfSamples
+            res.startIndex=startIndex
+            res.overflow=overflow
+            res.triggerAt=triggerAt
+            res.autoStop=autoStop
+            res.triggered=triggered
+            res.parameter=parameter
+
+        return streamingReadySimpleCallback

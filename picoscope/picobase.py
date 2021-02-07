@@ -21,6 +21,8 @@ import inspect
 import time
 
 import numpy as np
+from collections import Iterable
+import pdb
 
 from .error_codes import ERROR_CODES as _ERROR_CODES
 
@@ -144,7 +146,12 @@ class _PicoscopeBase(object):
         self.handle = None
 
         if connect is True:
-            self.open(serialNumber)
+            try:
+                self.open(serialNumber)
+            except OSError: # This covers the case of it not opening because a previous scope object hasn't been garbage collected yet.
+                import gc
+                gc.collect()
+                self.open(serialNumber)
 
     def getUnitInfo(self, info):
         """Return: A string containing the requested information."""
@@ -335,6 +342,7 @@ class _PicoscopeBase(object):
 
     def setNoOfCaptures(self, noCaptures):
         self._lowLevelSetNoOfCaptures(noCaptures)
+        self.noCaptures=noCaptures
 
     def memorySegments(self, noSegments):
         maxSamples = self._lowLevelMemorySegments(noSegments)
@@ -736,7 +744,6 @@ class _PicoscopeBase(object):
             triggerType = self.SIGGEN_TRIGGER_TYPES[triggerType]
         if not isinstance(triggerSource, int):
             triggerSource = self.SIGGEN_TRIGGER_SOURCES[triggerSource]
-
         if waveform.dtype == np.int16:
             if offsetVoltage is None:
                 offsetVoltage = 0.0
@@ -764,14 +771,15 @@ class _PicoscopeBase(object):
 
             # make a copy of the original data as to not clobber up the array
             waveform = waveform - offsetVoltage
+            wvfmPkToPk=np.max(np.absolute(waveform)) * 2
             if pkToPk is None:
-                pkToPk = np.max(np.absolute(waveform)) * 2
+                pkToPk = wvfmPkToPk
 
             # waveform should now be baised around 0
             # with
             #     max(waveform) = +pkToPk/2
             #     min(waveform) = -pkToPk/2
-            waveform /= pkToPk
+            waveform /= wvfmPkToPk
 
             # waveform should now be a number between -0.5 and +0.5
 
@@ -806,6 +814,66 @@ class _PicoscopeBase(object):
             waveform_duration *= 4
 
         return waveform_duration
+
+
+    def allocateDataBuffers(self, channels='A', numSamples=0, fromSegment=0, 
+        toSegment=None, downSampleMode=0, data=None):
+        """Allocate memory for the driver and application buffers, and return it, or connect the given pre-allocated buffer to the driver.
+        """
+        if not isinstance(channels, Iterable) or isinstance(channels, str): #If it's a list
+            channels=[channels]
+        channels=[chan if isinstance(chan, int) else self.CHANNELS[chan] 
+                                for chan in channels]
+
+        numChannels=len(channels)
+
+        if toSegment is None:
+            toSegment = self.noSegments - 1
+        numSegmentsToCopy = toSegment - fromSegment + 1
+
+        if numSamples == 0:
+            numSamples = min(self.maxSamples, self.noSamples)
+        if data is None:
+            data = np.ascontiguousarray(
+                np.zeros((numChannels, numSegmentsToCopy, numSamples), dtype=np.int16)
+                )
+
+        for n, chan in enumerate(channels): 
+            # set up each row in the data array as a buffer for one of
+            # the memory segments in the scope
+            for i, segment in enumerate(range(fromSegment, toSegment+1)):
+                self._lowLevelSetDataBuffer(chan,
+                                                data[n,i],
+                                                downSampleMode,
+                                                segment)
+                #The above change is correct for my ps5000a: not sure about other scopes? Morgan.
+                #self._lowLevelSetDataBufferBulk(channel,
+                #                                data[i],
+                #                                segment,
+                #                                downSampleMode)
+        self.data=data
+        return data
+
+    def setupStreaming(self, channels='A', numSamples=0, fromSegment=0, 
+        toSegment=None, downSampleRatio=1, downSampleMode=0, data=None):
+        # Process the channels parameter: could be int, string, or list of those
+        overflow = np.ascontiguousarray()
+
+    def runStreaming(self, preTrig=0.0,  downSampleRatio=1,downSampleMode=0, bAutoStop=False):
+
+        sampleInterval=self.getTimestepFromTimebase(self.timebase)
+        TIME_UNITS=2 #ns
+        nSampleInterval=int(sampleInterval/1e-9)
+        Npts= min(self.noSamples, self.maxSamples)
+        print("Npts: {}".format(Npts))
+        print("nSampleInterval: {}".format(nSampleInterval))
+        self._lowLevelRunStreaming(nSampleInterval, TIME_UNITS, int(Npts * preTrig), int(Npts * (1 - preTrig)), bAutoStop, downSampleRatio, downSampleMode, self.data.shape[-1])
+
+        #self._lowLevelRunBlock(int(nSamples * pretrig), int(nSamples * (1 - pretrig)),
+                               #self.timebase, self.oversample, segmentIndex)
+
+    def getStreamingLatestValues(self,callback=None):
+        self._lowLevelGetStreamingLatestValues(callback)
 
     def getAWGDeltaPhase(self, timeIncrement):
         """
@@ -907,6 +975,39 @@ class _PicoscopeBase(object):
             ecDesc = self.errorNumToDesc(ec)
             raise IOError('Error calling %s: %s (%s)' % (
                 str(inspect.stack()[1][3]), ecName, ecDesc))
+
+    def quickSetup(self, 
+            chanAParams=dict(coupling="AC", VRange=10.0, VOffset=0, BWLimited=False, probeAttenuation=1.0),
+            chanBParams=None,
+            sampleRate=5e6, 
+            acqTime=1e-3,
+            triggerParams=dict(trigSrc="External", threshold_V=1.0, direction="Rising", delay=0, enabled=True, timeout_ms=100),
+            nCaps=1, nMemorySegments=-1, 
+            resolution=None,
+            ):
+        """Set most parameters in one function
+        @chanA(BCD)Params: dictionary of arguments to setChannel. Note that if the dictionary is None, the channel will be disabled. 
+        @sampleRate: the desired samples per second for the scope, in Hz
+        @acqTime: the length of time (in seconds) to record after each trigger.
+        @triggerParams: a dictionary of arguments to setSimpleTrigger
+        @nCaps: The number of traces to store in memory each time runBlock is called (and by default the number that will be retrieved by getDataRawBulk)
+        @nMermorySegments: the number of windows in which to divide the scope memory. If -1 (default), it will be set to @nCaps
+        @resolution: calls setResolution, only for 5000 series devices.
+        
+        """
+        self.setChannel("A",  enabled=True, **chanAParams) if chanAParams else self.setChannel("A", enabled=False)
+        self.setChannel("B",  enabled=True, **chanBParams) if chanBParams else self.setChannel("B", enabled=False)
+
+        if resolution:
+            self.setResolution(str(resolution));
+        self.setNoOfCaptures(nCaps)
+        self.memorySegments(nCaps if nMemorySegments==-1 else nMemorySegments)
+        if nMemorySegments !=-1 and nMemorySegments<nCaps:
+            raise ValueError("nMemorySegments needs to be equal to or greater than the number of captures")
+        actSampleRate, maxN=self.setSamplingFrequency(sampleRate, sampleRate*acqTime)
+        self.setSimpleTrigger(**triggerParams)
+        if maxN < sampleRate*acqTime:
+            raise ValueError("At sample rate {} with {} buffers, the maximum collection time is {}.".format(actSampleRate, nCaps, maxN/sampleRate))
 
     def errorNumToName(self, num):
         """Return the name of the error as a string."""
